@@ -29,7 +29,6 @@ def LoadMNIST(folder):
 class kNNFit(nn.Module):
     def __init__(self, D, eps, init_W=None):
         super(kNNFit, self).__init__()
-        #W = np.random.uniform(size = [D]).astype(np.float32)
         if (init_W is None):
             init_W = np.ones([D], dtype=np.float32)
         else:
@@ -84,7 +83,7 @@ def formatDateTime(dtn=None):
 
 
 if not torch.cuda.is_available():
-    raise Exception("cpu implementation not available")
+    raise Exception('cpu implementation not available')
 
 deviceIx = 0 
 torch_device = torch.device('cuda:' + str(deviceIx))
@@ -93,10 +92,10 @@ cp_device.use()
 
 seed_everything(seed = 0)
 eps = 1e-6
-loss_func = nn.BCEWithLogitsLoss(reduction="mean")
+loss_func = nn.BCEWithLogitsLoss(reduction='mean')
 opt_lr = 0.001
 
-X, Y_01, X_test, Y_01_test = LoadMNIST('c:\\lixo') #!!!!!
+X, Y_01, X_test, Y_01_test = LoadMNIST('dat') 
 
 batchLength = 64
 epochs = 3
@@ -114,11 +113,11 @@ Y_test = np.where(Y_01_test > 0.5, 1, -1).astype(np.float32)
 model = kNNFit(D, eps).to(torch_device)
 opt = torch.optim.Adam(model.parameters(), lr=opt_lr, eps=eps)
 
-print("tot attribs={}, tot train samples={}, tot test samples={}, tot batches={}, batchLength={}, tot epochs={}"
+print('tot attribs={}, tot train samples={}, tot test samples={}, tot batches={}, batchLength={}, tot epochs={}'
     .format(D, M, N, totBatches, batchLength, epochs))
 
 if (M % batchLength != 0):
-    raise Exception("train set size must be divisible by batch length")
+    raise Exception('train set size must be divisible by batch length')
 
 # load all train&test data onto the gpu
 t_X_bits_T = torch.tensor(np.packbits(X.reshape([X.shape[0],-1]).astype(np.int32), axis=1).view(np.int32), device=torch_device).T.contiguous()
@@ -136,14 +135,14 @@ losses_test = []
 accs_test = []
 
 for epoch in range(epochs):
-    # a full epoch is the partitioning of the whole training datum indexes, shuffled, into "totBatches" batches
+    # a full epoch is the partitioning of the whole training datum indexes, shuffled, into 'totBatches' batches
     epochIxs = GenerateEpochIxs(M)
     for batch in range(totBatches):
         with torch.no_grad():
-            # each batch consists of the sampling of "batchLength" elements, without 
+            # each batch consists of the sampling of 'batchLength' elements, without 
             # replacement, from the indexes of the training set
-            # "t_holdoutIxs" are the set of indexes of the training data that will search for their nearest neighbours
-            # "t_knnIxs" are the set of indexes of the training data that will be used as knn neighbors
+            # 't_holdoutIxs' are the set of indexes of the training data that will search for their nearest neighbours
+            # 't_knnIxs' are the set of indexes of the training data that will be used as knn neighbors
             t_holdoutIxs, t_knnIxs = GenerateBatchIxs(epochIxs, batchLength, batch)
             # get subsets of the training data on the gpu, based on the current batch's indexes
             t_X_bits_T_knn, t_Y_knn, t_X_bits_T_holdout, t_X_bits_T_holdout_byDimBlock4, t_Y_holdout_01 = \
@@ -174,8 +173,13 @@ for epoch in range(epochs):
             losses_test.append(loss_test)
             accs.append(acc)
             accs_test.append(acc_test)
-            print("{} epoch={:03d}, batch={:04d}, loss={:6.6f}, acc={:3.2f}%, test loss={:6.6f}, test acc={:3.2f}% "
+            print('{} epoch={:03d}, batch={:04d}, loss={:6.6f}, acc={:3.2f}%, test loss={:6.6f}, test acc={:3.2f}% '
                   .format(formatDateTime(), epoch, batch, loss, acc, loss_test, acc_test))
+
+
+plt.imshow(abs(model.t_W).reshape([32,32]).detach().cpu().numpy(), interpolation='none')
+plt.title('trained W')
+plt.show()
 
 
 fig = plt.figure()
@@ -189,9 +193,8 @@ lns = lns1+lns2+lns3+lns4
 labs = [l.get_label() for l in lns]
 ax.legend(lns, labs, loc='lower left')
 ax.grid()
-ax.set_xlabel("iteration")
-ax.set_ylabel("loss")
-ax2.set_ylabel("acc%")
+ax.set_xlabel('iteration')
+ax.set_ylabel('loss')
+ax2.set_ylabel('acc%')
 ax2.set_ylim(0, 100)
 plt.show()
-
