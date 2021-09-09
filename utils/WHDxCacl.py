@@ -138,7 +138,7 @@ class WHDxFunction(tag.Function):
             if (M % totThreads != 0):
                 totBlocks += 1
 
-            ## slow, mem-inneficient version. uses original X and A, not the bit-packed version
+            ## slow, mem-inneficient version wich uses original X and A (not the bit-packed version):
             # WHDx_T = ((A - X) * W).abs()
 
             WHDx_T = torch.zeros((N,M), dtype=W.dtype, device=W.device, requires_grad=False) 
