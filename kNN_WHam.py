@@ -1,4 +1,5 @@
 import datetime
+import math
 import numpy as np
 import numpy.ma as ma
 from matplotlib import pyplot as plt
@@ -6,31 +7,16 @@ import os
 import torch
 from torch import nn
 import cupy as cp
-from WHDxCacl import WHDxFunction
+from utils.WHDxCacl import WHDxFunction
 from pytorch_lightning import seed_everything
+from utils.LoadMNIST import LoadMNIST_0Lab as lm
 
-
-def LoadMNIST(folder):
-    # https://github.com/aiddun/binary-mnist/tree/master/original_28x28/binary_digits_binary_pixels/x_train.npy
-    # https://github.com/aiddun/binary-mnist/blob/master/original_28x28/binary_digits_all_pixels/y_train.npy
-    def Load(file_x, file_y):
-        x = np.load(file_x)
-        y = np.load(file_y).astype(dtype=np.float32)
-        x_padded = np.empty([x.shape[0],32,32], dtype=np.float32)
-        for ix in range(x.shape[0]):
-            pic = x[ix].reshape([28,28])
-            pic = np.pad(pic, pad_width=2, mode='constant', constant_values=0)
-            x_padded[ix] = pic.astype(dtype=np.float32)
-        return x_padded, y
-    x_train, y_train = Load(os.path.join(folder, 'x_train.npy'), os.path.join(folder, 'y_train.npy'))
-    x_test, y_test = Load(os.path.join(folder, 'x_test.npy'), os.path.join(folder, 'y_test.npy'))
-    return x_train, y_train, x_test, y_test 
 
 class kNNFit(nn.Module):
     def __init__(self, D, eps, init_W=None):
         super(kNNFit, self).__init__()
         if (init_W is None):
-            init_W = np.ones([D], dtype=np.float32)
+            init_W = np.full([D], math.sqrt(1/D), dtype=np.float32)
         else:
             init_W = init_W.astype(np.float32)
         self.WHDxFunc = WHDxFunction.apply
@@ -51,9 +37,11 @@ class kNNFit(nn.Module):
         return t_shiftedScore
 
     def F(self, x): 
-        # TODO: clamp x
-        inner = x * (1 - self.k) / (self.k * (1 - 2 * abs(x)) + 1)
-        outer = 0.5 + 0.5 * (inner * 2 - 1) * (1 + self.j) / (- self.j * (1 - 2 * abs(inner * 2 - 1)) + 1)
+        x = torch.clamp(x, 0, 1)
+        j = torch.clamp(self.j, -1, 1)
+        k = torch.clamp(self.k, -1, 1)
+        inner = x * (1 - k) / (k * (1 - 2 * abs(x)) + 1)
+        outer = (1 + (inner * 2 - 1) * (1 + j) / (- j * (1 - 2 * abs(inner * 2 - 1)) + 1)) / 2
         return outer 
 
 
@@ -92,38 +80,42 @@ cp_device.use()
 
 seed_everything(seed = 0)
 eps = 1e-6
-loss_func = nn.BCEWithLogitsLoss(reduction='mean')
 opt_lr = 0.001
-
-X, Y_01, X_test, Y_01_test = LoadMNIST('dat') 
-
+l1_lambda = 0.0
+l2_lambda = 0.1
 batchLength = 64
 epochs = 3
+MINST_th = 230
+dataFolder = 'dat' 
+X, Y_01 = lm(os.path.join(dataFolder, 'mnist-train-images.npy'), os.path.join(dataFolder, 'mnist-train-labels.npy'), th = MINST_th)
+X_test, Y_01_test = lm(os.path.join(dataFolder, 'mnist-val-images.npy'), os.path.join(dataFolder, 'mnist-val-labels.npy'), th = MINST_th)
 D = X.shape[1] * X.shape[2]
 totBatches = X.shape[0] // batchLength
 M = totBatches * batchLength
-X = X[:M]
-Y_01 = Y_01[:M]
-Y = np.where(Y_01 > 0.5, 1, -1).astype(np.float32)
 N = (X_test.shape[0] // 64) * 64
-X_test = X_test[:N]
-Y_01_test = Y_01_test[:N]
-Y_test = np.where(Y_01_test > 0.5, 1, -1).astype(np.float32)
 
-model = kNNFit(D, eps).to(torch_device)
-opt = torch.optim.Adam(model.parameters(), lr=opt_lr, eps=eps)
 
-print('tot attribs={}, tot train samples={}, tot test samples={}, tot batches={}, batchLength={}, tot epochs={}'
-    .format(D, M, N, totBatches, batchLength, epochs))
+print('tot attribs={}\r\ntot train samples={}\r\ntot test samples={}\r\ntot batches={}\r\nbatchLength={}\r\ntot epochs={}\r\nopt_lr={}\r\nl1_lambda={}\r\nl2_lambda={}\r\nMINST_th={}'
+    .format(D, M, N, totBatches, batchLength, epochs, opt_lr, l1_lambda, l2_lambda, MINST_th))
 
 if (M % batchLength != 0):
     raise Exception('train set size must be divisible by batch length')
 
-# load all train&test data onto the gpu
+loss_func = nn.BCEWithLogitsLoss(reduction='mean')
+model = kNNFit(D, eps).to(torch_device)
+opt = torch.optim.Adam(model.parameters(), lr=opt_lr, eps=eps)
+
+# trim data to pow2-boundaries, etc
+X = X[:M]
+Y_01 = Y_01[:M]
+Y = np.where(Y_01 > 0.5, 1, -1).astype(np.float32)
+X_test = X_test[:N]
+Y_01_test = Y_01_test[:N]
+Y_test = np.where(Y_01_test > 0.5, 1, -1).astype(np.float32)
+# load data onto the gpu
 t_X_bits_T = torch.tensor(np.packbits(X.reshape([X.shape[0],-1]).astype(np.int32), axis=1).view(np.int32), device=torch_device).T.contiguous()
 t_Y = torch.tensor(Y, device=torch_device).contiguous()
 t_Y_01 = torch.tensor(np.where(Y >= 0, 1.0, 0.0).astype(np.float32), device=torch_device).contiguous()
-
 t_X_bits_T_test = torch.tensor(np.packbits(X_test.reshape([X_test.shape[0],-1]).astype(np.int32), axis=1).view(np.int32), device=torch_device).T.contiguous()
 t_X_bits_T_byDimBlock4_test = WHDxFunction.GetDimBlock4(t_X_bits_T_test)
 t_Y_test = torch.tensor(Y_test, device=torch_device).contiguous()
@@ -150,7 +142,9 @@ for epoch in range(epochs):
 
         t_predict_y = model([t_X_bits_T_knn, t_X_bits_T_holdout, t_X_bits_T_holdout_byDimBlock4, t_Y_knn])
         
-        loss = loss_func(t_predict_y, t_Y_holdout_01)
+        loss = loss_func(t_predict_y, t_Y_holdout_01) + \
+            l1_lambda * torch.linalg.norm(model.t_W, 1) +\
+            l2_lambda * torch.linalg.norm(model.t_W, 2)
 
         loss.backward()
         opt.step()
@@ -166,7 +160,7 @@ for epoch in range(epochs):
             t_predict_y_test = model([t_X_bits_T, t_X_bits_T_test, t_X_bits_T_byDimBlock4_test, t_Y])
             loss_test = loss_func(t_predict_y_test, t_Y_01_test).item()
             acc_test = CalcAcc(t_predict_y_test, t_Y_01_test)
-      
+
             acc = CalcAcc(t_predict_y, t_Y_holdout_01)
             loss = loss.item()
             losses.append(loss)
@@ -177,8 +171,8 @@ for epoch in range(epochs):
                   .format(formatDateTime(), epoch, batch, loss, acc, loss_test, acc_test))
 
 
-plt.imshow(abs(model.t_W).reshape([32,32]).detach().cpu().numpy(), interpolation='none')
-plt.title('trained W')
+plt.imshow(abs(model.t_W.detach()).reshape([32,32]).detach().cpu().numpy(), interpolation='none')
+plt.title('trained W at acc={:3.2f}% (test acc={:3.2f}%)'.format(acc, acc_test))
 plt.show()
 
 
@@ -191,10 +185,11 @@ lns3 = ax2.plot(accs, color='red', label='train acc')
 lns4 = ax2.plot(accs_test, color='pink', label='test acc')
 lns = lns1+lns2+lns3+lns4
 labs = [l.get_label() for l in lns]
-ax.legend(lns, labs, loc='lower left')
+ax.legend(lns, labs, loc='center right')
 ax.grid()
 ax.set_xlabel('iteration')
 ax.set_ylabel('loss')
 ax2.set_ylabel('acc%')
 ax2.set_ylim(0, 100)
 plt.show()
+
